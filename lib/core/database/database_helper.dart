@@ -8,6 +8,7 @@ import '../models/location_event.dart';
 import '../models/home_work_location.dart';
 import '../models/poi.dart';
 import '../models/region.dart';
+import '../models/achievement.dart';
 import 'package:geolocator/geolocator.dart';
 
 /// Хелпер для работы с локальной SQLite БД
@@ -101,12 +102,41 @@ class DatabaseHelper {
       CREATE TABLE opened_pois (
         poi_id TEXT PRIMARY KEY,
         opened_at INTEGER NOT NULL,
+        opened_hour INTEGER NOT NULL,
+        FOREIGN KEY (poi_id) REFERENCES pois(id)
+      )
+    ''');
+
+    // Таблица достижений
+    await db.execute('''
+      CREATE TABLE achievements (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        category TEXT NOT NULL,
+        icon_url TEXT,
+        unlocked_at INTEGER,
+        progress TEXT
+      )
+    ''');
+
+    // Таблица заметок пользователя к POI
+    await db.execute('''
+      CREATE TABLE poi_notes (
+        poi_id TEXT PRIMARY KEY,
+        note TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
         FOREIGN KEY (poi_id) REFERENCES pois(id)
       )
     ''');
 
     // Индексы
     await db.execute('CREATE INDEX idx_opened_pois_opened_at ON opened_pois(opened_at)');
+    await db.execute('CREATE INDEX idx_opened_pois_opened_hour ON opened_pois(opened_hour)');
+    await db.execute('CREATE INDEX idx_achievements_category ON achievements(category)');
+    await db.execute('CREATE INDEX idx_achievements_unlocked_at ON achievements(unlocked_at)');
+    await db.execute('CREATE INDEX idx_poi_notes_poi_id ON poi_notes(poi_id)');
 
     // Индексы для оптимизации запросов
     await db.execute('CREATE INDEX idx_location_events_synced ON location_events(synced, timestamp)');
@@ -149,6 +179,28 @@ class DatabaseHelper {
       'location_events',
       where: 'synced = ?',
       whereArgs: [0],
+      orderBy: 'timestamp ASC',
+      limit: limit,
+    );
+
+    return results.map((row) => _locationEventFromMap(row)).toList();
+  }
+
+  /// Получает синхронизированные события за период
+  Future<List<LocationEvent>> getSyncedEvents({
+    required DateTime startDate,
+    required DateTime endDate,
+    int limit = 10000,
+  }) async {
+    final db = await database;
+    final results = await db.query(
+      'location_events',
+      where: 'synced = ? AND timestamp >= ? AND timestamp <= ?',
+      whereArgs: [
+        1,
+        startDate.millisecondsSinceEpoch,
+        endDate.millisecondsSinceEpoch,
+      ],
       orderBy: 'timestamp ASC',
       limit: limit,
     );
@@ -434,9 +486,9 @@ class DatabaseHelper {
         );
         
         // Если следующее событие далеко (>100м) или через большой промежуток (>30 мин)
-        // считаем, что это время убытия
+        // считаем, что время убытия - это время следующего события
         if (distance > 100 || timeDiff > 30 * 60 * 1000) {
-          departureTime = DateTime.fromMillisecondsSinceEpoch(currentTime);
+          departureTime = DateTime.fromMillisecondsSinceEpoch(nextTime);
           break;
         }
       }
@@ -550,6 +602,7 @@ class DatabaseHelper {
   /// Безопасное открытие POI с проверкой через транзакцию (избегает race condition)
   Future<void> markPOIOpenedSafe(String poiId) async {
     final db = await database;
+    final now = DateTime.now();
     await db.transaction((txn) async {
       // Проверяем, не открыт ли уже POI
       final existing = await txn.query(
@@ -564,7 +617,8 @@ class DatabaseHelper {
           'opened_pois',
           {
             'poi_id': poiId,
-            'opened_at': DateTime.now().millisecondsSinceEpoch,
+            'opened_at': now.millisecondsSinceEpoch,
+            'opened_hour': now.hour, // Сохраняем час открытия для проверки ночных ачивок
           },
         );
       }
@@ -602,6 +656,91 @@ class DatabaseHelper {
     final db = await database;
     final results = await db.query('opened_pois');
     return results.map((row) => row['poi_id'] as String).toList();
+  }
+
+  /// Получает POI, открытые в указанный час (для ночных ачивок)
+  Future<List<String>> getPOIsOpenedAtHour(int hour) async {
+    final db = await database;
+    final results = await db.query(
+      'opened_pois',
+      where: 'opened_hour = ?',
+      whereArgs: [hour],
+    );
+    return results.map((row) => row['poi_id'] as String).toList();
+  }
+
+  /// Получает POI, открытые в ночное время (20:00-08:00)
+  Future<List<String>> getPOIsOpenedAtNight() async {
+    final db = await database;
+    // Ночное время: 20-23 и 0-7 часов
+    final results = await db.rawQuery('''
+      SELECT DISTINCT poi_id FROM opened_pois
+      WHERE opened_hour >= 20 OR opened_hour < 8
+    ''');
+    return results.map((row) => row['poi_id'] as String).toList();
+  }
+
+  // ========== Методы для работы с достижениями ==========
+
+  Future<void> insertAchievement(Achievement achievement) async {
+    final db = await database;
+    await db.insert(
+      'achievements',
+      {
+        'id': achievement.id,
+        'title': achievement.title,
+        'description': achievement.description,
+        'category': achievement.category,
+        'icon_url': achievement.iconUrl,
+        'unlocked_at': achievement.unlockedAt?.millisecondsSinceEpoch,
+        'progress': achievement.progress != null
+            ? jsonEncode(achievement.progress)
+            : null,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<Achievement>> getAchievements({bool unlockedOnly = false}) async {
+    final db = await database;
+    final results = unlockedOnly
+        ? await db.query(
+            'achievements',
+            where: 'unlocked_at IS NOT NULL',
+            orderBy: 'unlocked_at DESC',
+          )
+        : await db.query('achievements', orderBy: 'unlocked_at DESC');
+
+    return results.map((row) => _achievementFromMap(row)).toList();
+  }
+
+  Future<Achievement?> getAchievementById(String id) async {
+    final db = await database;
+    final results = await db.query(
+      'achievements',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+
+    if (results.isEmpty) return null;
+    return _achievementFromMap(results.first);
+  }
+
+  Achievement _achievementFromMap(Map<String, dynamic> map) {
+    return Achievement(
+      id: map['id'] as String,
+      title: map['title'] as String,
+      description: map['description'] as String,
+      category: map['category'] as String,
+      iconUrl: map['icon_url'] as String?,
+      unlockedAt: map['unlocked_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['unlocked_at'] as int)
+          : null,
+      progress: map['progress'] != null
+          ? jsonDecode(map['progress'] as String) as Map<String, dynamic>
+          : null,
+    );
   }
 
   /// Очищает старые синхронизированные события (старше указанного количества дней)

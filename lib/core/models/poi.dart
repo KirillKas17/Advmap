@@ -1,4 +1,5 @@
 import 'package:json_annotation/json_annotation.dart';
+import 'package:geolocator/geolocator.dart';
 
 part 'poi.g.dart';
 
@@ -64,22 +65,34 @@ class POI {
   }
   
   /// Проверяет, находится ли точка внутри полигона (алгоритм Ray Casting)
+  /// Улучшенная версия с обработкой edge cases
   bool _isPointInPolygon(double lat, double lon, List<GeoPoint> polygon) {
     if (polygon.length < 3) return false;
+    
+    // Нормализуем координаты для обработки пересечения 180 меридиана
+    final normalizedLon = _normalizeLongitude(lon);
+    final normalizedPolygon = polygon.map((p) => _normalizeLongitude(p.longitude)).toList();
     
     bool inside = false;
     for (int i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
       final xi = polygon[i].latitude;
-      final yi = polygon[i].longitude;
+      final yi = normalizedPolygon[i];
       final xj = polygon[j].latitude;
-      final yj = polygon[j].longitude;
+      final yj = normalizedPolygon[j];
       
-      // Проверяем пересечение луча с ребром полигона
-      final intersect = ((yi > lon) != (yj > lon)) &&
-          (lat < (xj - xi) * (lon - yi) / (yj - yi) + xi);
+      // Проверяем пересечение горизонтального луча с ребром полигона
+      final intersect = ((yi > normalizedLon) != (yj > normalizedLon)) &&
+          (lat < (xj - xi) * (normalizedLon - yi) / (yj - yi) + xi);
       if (intersect) inside = !inside;
     }
     return inside;
+  }
+  
+  /// Нормализует долготу в диапазон [-180, 180]
+  double _normalizeLongitude(double lon) {
+    while (lon > 180) lon -= 360;
+    while (lon < -180) lon += 360;
+    return lon;
   }
 }
 

@@ -196,6 +196,7 @@ class HomeWorkDetector {
   }
 
   /// Получает соседей точки в радиусе epsilon
+  /// Оптимизированная версия с предварительной фильтрацией
   List<int> _getNeighbors(
     List<VisitPoint> points,
     int pointIndex,
@@ -204,18 +205,33 @@ class HomeWorkDetector {
     final neighbors = <int>[];
     final point = points[pointIndex];
 
+    // Конвертируем epsilon (в градусах) в метры (~111000 метров на градус)
+    final epsilonMeters = epsilon * 111000;
+    
+    // Предварительная фильтрация по приближённому расстоянию (быстрее)
+    final latDelta = epsilonMeters / 111000.0;
+    final lonDelta = epsilonMeters / (111000.0 * (point.latitude.abs() / 90.0 + 0.1));
+
     for (int i = 0; i < points.length; i++) {
       if (i == pointIndex) continue;
 
+      final otherPoint = points[i];
+      
+      // Быстрая проверка по приближённым координатам
+      final latDiff = (otherPoint.latitude - point.latitude).abs();
+      final lonDiff = (otherPoint.longitude - point.longitude).abs();
+      
+      if (latDiff > latDelta || lonDiff > lonDelta) {
+        continue; // Точка точно не в радиусе
+      }
+
+      // Точная проверка расстояния
       final distance = Geolocator.distanceBetween(
         point.latitude,
         point.longitude,
-        points[i].latitude,
-        points[i].longitude,
+        otherPoint.latitude,
+        otherPoint.longitude,
       );
-
-      // Конвертируем epsilon (в градусах) в метры (~111000 метров на градус)
-      final epsilonMeters = epsilon * 111000;
 
       if (distance <= epsilonMeters) {
         neighbors.add(i);
@@ -307,6 +323,60 @@ class HomeWorkDetector {
     final now = DateTime.now();
 
     final visitPoints = await _getVisitPoints(weekAgo, now);
-    return visitPoints.length >= AppConfig.dbscanMinPoints;
+    
+    // Нужно минимум минимальное количество точек для кластеризации
+    if (visitPoints.length < AppConfig.dbscanMinPoints) {
+      return false;
+    }
+    
+    // Проверяем, есть ли хотя бы один кластер с достаточным количеством точек
+    final clusters = _dbscanClustering(visitPoints);
+    if (clusters.isEmpty) {
+      return false;
+    }
+    
+    // Проверяем, что есть хотя бы один кластер с достаточным временем пребывания
+    final significantClusters = clusters.where((c) {
+      return c.totalVisits >= AppConfig.dbscanMinPoints &&
+          c.totalDuration.inMinutes >= AppConfig.minStayDurationForHomeWork * 2;
+    }).toList();
+    
+    return significantClusters.isNotEmpty;
+  }
+  
+  /// Проверяет, путешествует ли пользователь (нет постоянного места)
+  Future<bool> isTraveling() async {
+    final db = DatabaseHelper.instance;
+    final monthAgo = DateTime.now().subtract(const Duration(days: 30));
+    final now = DateTime.now();
+    
+    final visitPoints = await _getVisitPoints(monthAgo, now);
+    if (visitPoints.length < AppConfig.dbscanMinPoints * 2) {
+      return false; // Недостаточно данных
+    }
+    
+    final clusters = _dbscanClustering(visitPoints);
+    
+    // Если кластеров много (>5) и они распределены по большой территории - путешествие
+    if (clusters.length > 5) {
+      // Проверяем разброс кластеров
+      double maxDistance = 0;
+      for (int i = 0; i < clusters.length; i++) {
+        for (int j = i + 1; j < clusters.length; j++) {
+          final distance = clusters[i].distanceTo(
+            clusters[j].centerLatitude,
+            clusters[j].centerLongitude,
+          );
+          if (distance > maxDistance) {
+            maxDistance = distance;
+          }
+        }
+      }
+      
+      // Если максимальное расстояние между кластерами > 1000 км - путешествие
+      return maxDistance > 1000000; // 1000 км
+    }
+    
+    return false;
   }
 }

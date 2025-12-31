@@ -7,6 +7,8 @@ import '../database/database_helper.dart';
 import '../models/location_event.dart';
 import '../models/poi.dart';
 import '../models/region.dart';
+import '../models/achievement.dart';
+import '../services/achievement_service.dart';
 import '../utils/logger.dart';
 import 'dart:convert';
 
@@ -54,10 +56,28 @@ class SyncService {
         },
       );
 
-      if (response.statusCode == 200) {
+      if (response.statusCode == 200 || response.statusCode == 201) {
         // Помечаем события как синхронизированные
         final eventIds = unsyncedEvents.map((e) => e.id).toList();
         await db.markEventsAsSynced(eventIds);
+        
+        // Проверяем, есть ли в ответе информация о разблокированных ачивках
+        if (response.data is Map && response.data['achievements'] != null) {
+          final achievementsData = response.data['achievements'] as List;
+          // Обрабатываем разблокированные ачивки с сервера
+          final achievementService = AchievementService.instance;
+          for (final achievementJson in achievementsData) {
+            try {
+              final achievement = Achievement.fromJson(
+                achievementJson as Map<String, dynamic>,
+              );
+              await achievementService.saveAchievement(achievement);
+            } catch (e) {
+              Logger.error('Ошибка обработки ачивки с сервера', e);
+            }
+          }
+        }
+        
         return true;
       }
 

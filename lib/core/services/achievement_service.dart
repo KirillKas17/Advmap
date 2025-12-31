@@ -3,6 +3,7 @@ import '../models/achievement.dart';
 import '../models/home_work_location.dart';
 import '../models/poi.dart';
 import '../utils/logger.dart';
+import 'push_notification_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 /// Сервис для работы с достижениями
@@ -74,13 +75,24 @@ class AchievementService {
     
     // Подсчитываем количество поездок дом-работа за последние 30 дней
     final thirtyDaysAgo = DateTime.now().subtract(const Duration(days: 30));
-    final events = await db.getUnsyncedEvents(limit: 10000);
-    final syncedEvents = await db.getUnsyncedEvents(limit: 10000); // TODO: Добавить метод для синхронизированных
+    final now = DateTime.now();
+    
+    // Получаем все события (синхронизированные и несинхронизированные)
+    final unsyncedEvents = await db.getUnsyncedEvents(limit: 10000);
+    final syncedEvents = await db.getSyncedEvents(
+      startDate: thirtyDaysAgo,
+      endDate: now,
+      limit: 10000,
+    );
+    final allEvents = [...unsyncedEvents, ...syncedEvents];
     
     int routeCount = 0;
     bool wasAtHome = false;
     
-    for (final event in events) {
+    // Сортируем события по времени
+    allEvents.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    
+    for (final event in allEvents) {
       final distanceToHome = Geolocator.distanceBetween(
         home.latitude,
         home.longitude,
@@ -133,12 +145,11 @@ class AchievementService {
     );
     
     // Фильтруем только те, что открыты ночью (20:00-08:00)
+    final nightOpenedPOIs = await db.getPOIsOpenedAtNight();
     int nightOpenedCount = 0;
-    final openedPOIs = await db.getOpenedPOIIds();
     
     for (final poi in nearbyPOIs) {
-      if (openedPOIs.contains(poi.id)) {
-        // TODO: Проверить время открытия POI
+      if (nightOpenedPOIs.contains(poi.id)) {
         nightOpenedCount++;
       }
     }
@@ -157,8 +168,12 @@ class AchievementService {
   }
 
   /// Проверяет ачивку "Первый исследователь" (открыть POI первым)
+  /// Требует интеграции с сервером для проверки, был ли POI открыт кем-то раньше
   Future<Achievement?> _checkFirstExplorerAchievement(DatabaseHelper db) async {
-    // TODO: Требует интеграции с сервером для проверки, был ли POI открыт кем-то раньше
+    // Эта ачивка требует проверки на сервере через API,
+    // так как нужно знать, был ли POI открыт кем-то раньше этого пользователя
+    // Реализация будет добавлена при интеграции с серверным API для проверки первенства
+    // Пока что возвращаем null, так как локально невозможно определить первенство
     return null;
   }
 
@@ -198,13 +213,23 @@ class AchievementService {
 
   /// Сохраняет разблокированную ачивку в БД
   Future<void> saveAchievement(Achievement achievement) async {
-    // TODO: Реализовать сохранение ачивок в БД
-    Logger.info('Ачивка разблокирована: ${achievement.title}');
+    final db = DatabaseHelper.instance;
+    
+    // Проверяем, не разблокирована ли уже ачивка
+    final existing = await db.getAchievementById(achievement.id);
+    if (existing == null || existing.unlockedAt == null) {
+      await db.insertAchievement(achievement);
+      Logger.info('Ачивка разблокирована: ${achievement.title}');
+      
+      // Отправляем уведомление
+      final pushService = PushNotificationService.instance;
+      await pushService.showAchievementNotification(achievement);
+    }
   }
 
   /// Получает все разблокированные ачивки
   Future<List<Achievement>> getUnlockedAchievements() async {
-    // TODO: Реализовать получение ачивок из БД
-    return [];
+    final db = DatabaseHelper.instance;
+    return await db.getAchievements(unlockedOnly: true);
   }
 }

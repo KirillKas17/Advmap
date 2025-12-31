@@ -9,6 +9,7 @@ import '../../core/services/home_work_detector.dart';
 import '../../core/services/location_service.dart';
 import '../../core/services/sync_service.dart';
 import '../../core/services/achievement_service.dart';
+import '../../core/navigation/app_router.dart';
 
 /// Главный экран с статистикой и достижениями
 class HomeScreen extends StatefulWidget {
@@ -92,7 +93,8 @@ class _HomeScreenState extends State<HomeScreen> {
           label: 'Посмотреть',
           textColor: Colors.white,
           onPressed: () {
-            // TODO: Навигация к деталям ачивки
+            // Навигация к деталям ачивки через роутер
+            AppRouter.navigateToAchievement(context, achievement);
           },
         ),
       ),
