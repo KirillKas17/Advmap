@@ -2,11 +2,13 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import '../models/location_event.dart';
 import '../models/home_work_location.dart';
 import '../models/poi.dart';
 import '../models/region.dart';
+import 'package:geolocator/geolocator.dart';
 
 /// Хелпер для работы с локальной SQLite БД
 class DatabaseHelper {
@@ -247,6 +249,56 @@ class DatabaseHelper {
     return results.map((row) => _poiFromMap(row)).toList();
   }
 
+  /// Получает POI в радиусе от точки (оптимизированный запрос)
+  Future<List<POI>> getPOIsNearby({
+    required double latitude,
+    required double longitude,
+    required double radiusMeters,
+    String? regionId,
+  }) async {
+    final db = await database;
+    
+    // Используем приближённую формулу для предварительной фильтрации
+    // 1 градус широты ≈ 111 км, 1 градус долготы ≈ 111 км * cos(широта)
+    final latDelta = radiusMeters / 111000.0;
+    final lonDelta = radiusMeters / (111000.0 * (latitude.abs() / 90.0 + 0.1));
+    
+    final minLat = latitude - latDelta;
+    final maxLat = latitude + latDelta;
+    final minLon = longitude - lonDelta;
+    final maxLon = longitude + lonDelta;
+    
+    String whereClause = '''
+      latitude >= ? AND latitude <= ? AND
+      longitude >= ? AND longitude <= ?
+    ''';
+    List<dynamic> whereArgs = [minLat, maxLat, minLon, maxLon];
+    
+    if (regionId != null) {
+      whereClause += ' AND region_id = ?';
+      whereArgs.add(regionId);
+    }
+    
+    final results = await db.query(
+      'pois',
+      where: whereClause,
+      whereArgs: whereArgs,
+    );
+    
+    final pois = results.map((row) => _poiFromMap(row)).toList();
+    
+    // Фильтруем по точному расстоянию
+    return pois.where((poi) {
+      final distance = Geolocator.distanceBetween(
+        latitude,
+        longitude,
+        poi.latitude,
+        poi.longitude,
+      );
+      return distance <= radiusMeters;
+    }).toList();
+  }
+
   POI _poiFromMap(Map<String, dynamic> map) {
     final geofenceJson = jsonDecode(map['geofence'] as String) as List;
     return POI(
@@ -341,21 +393,76 @@ class DatabaseHelper {
     required DateTime endDate,
   }) async {
     final db = await database;
-    final results = await db.rawQuery('''
-      SELECT 
-        latitude,
-        longitude,
-        timestamp as arrival_time,
-        LEAD(timestamp) OVER (ORDER BY timestamp) as departure_time
-      FROM location_events
-      WHERE timestamp >= ? AND timestamp <= ?
-      ORDER BY timestamp ASC
-    ''', [
-      startDate.millisecondsSinceEpoch,
-      endDate.millisecondsSinceEpoch,
-    ]);
+    
+    // Получаем все события за период, отсортированные по времени
+    final events = await db.query(
+      'location_events',
+      where: 'timestamp >= ? AND timestamp <= ?',
+      whereArgs: [
+        startDate.millisecondsSinceEpoch,
+        endDate.millisecondsSinceEpoch,
+      ],
+      orderBy: 'timestamp ASC',
+    );
 
-    return results;
+    if (events.isEmpty) return [];
+
+    final visitPoints = <Map<String, dynamic>>[];
+    
+    // Группируем события по близким координатам и времени
+    for (int i = 0; i < events.length; i++) {
+      final currentEvent = events[i];
+      final currentLat = currentEvent['latitude'] as double;
+      final currentLon = currentEvent['longitude'] as double;
+      final currentTime = currentEvent['timestamp'] as int;
+      
+      // Ищем следующее событие, которое достаточно далеко или через большой промежуток времени
+      DateTime? departureTime;
+      
+      for (int j = i + 1; j < events.length; j++) {
+        final nextEvent = events[j];
+        final nextLat = nextEvent['latitude'] as double;
+        final nextLon = nextEvent['longitude'] as double;
+        final nextTime = nextEvent['timestamp'] as int;
+        
+        final timeDiff = nextTime - currentTime;
+        final distance = Geolocator.distanceBetween(
+          currentLat,
+          currentLon,
+          nextLat,
+          nextLon,
+        );
+        
+        // Если следующее событие далеко (>100м) или через большой промежуток (>30 мин)
+        // считаем, что это время убытия
+        if (distance > 100 || timeDiff > 30 * 60 * 1000) {
+          departureTime = DateTime.fromMillisecondsSinceEpoch(currentTime);
+          break;
+        }
+      }
+      
+      // Если не нашли время убытия, используем время следующего события или текущее + 1 час
+      if (departureTime == null) {
+        if (i + 1 < events.length) {
+          departureTime = DateTime.fromMillisecondsSinceEpoch(
+            events[i + 1]['timestamp'] as int,
+          );
+        } else {
+          // Последнее событие - добавляем час к времени прибытия
+          departureTime = DateTime.fromMillisecondsSinceEpoch(currentTime)
+              .add(const Duration(hours: 1));
+        }
+      }
+      
+      visitPoints.add({
+        'latitude': currentLat,
+        'longitude': currentLon,
+        'arrival_time': currentTime,
+        'departure_time': departureTime.millisecondsSinceEpoch,
+      });
+    }
+
+    return visitPoints;
   }
 
   // ========== Методы для работы с регионами ==========
@@ -440,6 +547,30 @@ class DatabaseHelper {
     );
   }
 
+  /// Безопасное открытие POI с проверкой через транзакцию (избегает race condition)
+  Future<void> markPOIOpenedSafe(String poiId) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      // Проверяем, не открыт ли уже POI
+      final existing = await txn.query(
+        'opened_pois',
+        where: 'poi_id = ?',
+        whereArgs: [poiId],
+        limit: 1,
+      );
+
+      if (existing.isEmpty) {
+        await txn.insert(
+          'opened_pois',
+          {
+            'poi_id': poiId,
+            'opened_at': DateTime.now().millisecondsSinceEpoch,
+          },
+        );
+      }
+    });
+  }
+
   Future<bool> isPOIOpened(String poiId) async {
     final db = await database;
     final results = await db.query(
@@ -471,6 +602,80 @@ class DatabaseHelper {
     final db = await database;
     final results = await db.query('opened_pois');
     return results.map((row) => row['poi_id'] as String).toList();
+  }
+
+  /// Очищает старые синхронизированные события (старше указанного количества дней)
+  Future<int> cleanupOldSyncedEvents({int daysToKeep = 30}) async {
+    final db = await database;
+    final cutoffDate = DateTime.now().subtract(Duration(days: daysToKeep));
+    
+    final deleted = await db.delete(
+      'location_events',
+      where: 'synced = 1 AND synced_at < ?',
+      whereArgs: [cutoffDate.millisecondsSinceEpoch],
+    );
+    
+    return deleted;
+  }
+
+  /// Очищает старые несинхронизированные события (если их слишком много)
+  /// Оставляет только последние N событий
+  Future<int> cleanupOldUnsyncedEvents({int keepLast = 10000}) async {
+    final db = await database;
+    
+    // Получаем количество несинхронизированных событий
+    final countResult = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM location_events WHERE synced = 0',
+    );
+    final count = Sqflite.firstIntValue(countResult) ?? 0;
+    
+    if (count <= keepLast) {
+      return 0;
+    }
+    
+    // Удаляем самые старые события, оставляя только последние keepLast
+    final deleted = await db.rawDelete('''
+      DELETE FROM location_events
+      WHERE synced = 0 AND id IN (
+        SELECT id FROM location_events
+        WHERE synced = 0
+        ORDER BY timestamp ASC
+        LIMIT ?
+      )
+    ''', [count - keepLast]);
+    
+    return deleted;
+  }
+
+  /// Получает размер БД в байтах
+  Future<int> getDatabaseSize() async {
+    final dbPath = await getDatabasesPath();
+    final path = join(dbPath, 'explorers_map.db');
+    final file = File(path);
+    
+    if (await file.exists()) {
+      return await file.length();
+    }
+    
+    return 0;
+  }
+
+  /// Выполняет очистку БД от старых данных
+  Future<Map<String, int>> performDatabaseCleanup({
+    int daysToKeepSynced = 30,
+    int keepLastUnsynced = 10000,
+  }) async {
+    final syncedDeleted = await cleanupOldSyncedEvents(daysToKeep: daysToKeepSynced);
+    final unsyncedDeleted = await cleanupOldUnsyncedEvents(keepLast: keepLastUnsynced);
+    
+    // Оптимизируем БД после удаления
+    final db = await database;
+    await db.execute('VACUUM');
+    
+    return {
+      'synced_deleted': syncedDeleted,
+      'unsynced_deleted': unsyncedDeleted,
+    };
   }
 
   Future<void> close() async {

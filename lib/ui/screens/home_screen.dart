@@ -8,6 +8,7 @@ import '../../core/models/home_work_location.dart';
 import '../../core/services/home_work_detector.dart';
 import '../../core/services/location_service.dart';
 import '../../core/services/sync_service.dart';
+import '../../core/services/achievement_service.dart';
 
 /// Главный экран с статистикой и достижениями
 class HomeScreen extends StatefulWidget {
@@ -35,17 +36,67 @@ class _HomeScreenState extends State<HomeScreen> {
       _isLoading = true;
     });
 
-    // Загружаем определённые места
-    final db = DatabaseHelper.instance;
-    final locations = await db.getHomeWorkLocations(verifiedOnly: true);
-    
-    // Подсчитываем посещённые POI
-    _totalVisitedPOIs = await db.getOpenedPOIsCount();
+    try {
+      // Загружаем определённые места
+      final db = DatabaseHelper.instance;
+      final locations = await db.getHomeWorkLocations(verifiedOnly: true);
+      
+      // Подсчитываем посещённые POI
+      _totalVisitedPOIs = await db.getOpenedPOIsCount();
 
-    setState(() {
-      _homeWorkLocations = locations;
-      _isLoading = false;
-    });
+      // Проверяем и разблокируем ачивки
+      final achievementService = AchievementService.instance;
+      final newAchievements = await achievementService.checkAndUnlockAchievements();
+      
+      if (newAchievements.isNotEmpty) {
+        // Сохраняем новые ачивки
+        for (final achievement in newAchievements) {
+          await achievementService.saveAchievement(achievement);
+        }
+        
+        // Показываем уведомление о новых ачивках
+        if (mounted) {
+          _showAchievementNotification(newAchievements.first);
+        }
+      }
+
+      // Загружаем все разблокированные ачивки
+      _achievements = await achievementService.getUnlockedAchievements();
+
+      setState(() {
+        _homeWorkLocations = locations;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _showAchievementNotification(Achievement achievement) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.emoji_events, color: Colors.yellow),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('🎉 ${achievement.title}'),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 5),
+        action: SnackBarAction(
+          label: 'Посмотреть',
+          textColor: Colors.white,
+          onPressed: () {
+            // TODO: Навигация к деталям ачивки
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _checkHomeWorkDetection() async {

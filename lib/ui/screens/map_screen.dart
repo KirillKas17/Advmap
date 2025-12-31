@@ -9,6 +9,8 @@ import '../../core/services/region_detector.dart';
 import '../../core/database/database_helper.dart';
 import '../../core/models/poi.dart';
 import '../widgets/region_selection_dialog.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'dart:math' as math;
 
 /// Экран карты с туманом войны
 class MapScreen extends StatefulWidget {
@@ -22,6 +24,7 @@ class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
   Position? _currentPosition;
   List<POI> _pois = [];
+  Set<String> _openedPOIIds = {};
   bool _isLoading = true;
 
   @override
@@ -75,8 +78,13 @@ class _MapScreenState extends State<MapScreen> {
     final syncService = SyncService.instance;
     final pois = await syncService.loadPOIsForRegion(regionId);
     
+    // Загружаем список открытых POI
+    final db = DatabaseHelper.instance;
+    final openedIds = await db.getOpenedPOIIds();
+    
     setState(() {
       _pois = pois;
+      _openedPOIIds = openedIds.toSet();
     });
   }
 
@@ -88,9 +96,7 @@ class _MapScreenState extends State<MapScreen> {
       );
     }
 
-    final center = _currentPosition != null
-        ? LatLng(_currentPosition!.latitude, _currentPosition!.longitude)
-        : const LatLng(55.7558, 37.6173); // Москва по умолчанию
+import '../../core/config/app_constants.dart';
 
     return Scaffold(
       appBar: AppBar(
@@ -133,16 +139,22 @@ class _MapScreenState extends State<MapScreen> {
             urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
             userAgentPackageName: 'com.explorersmap.app',
           ),
-          // Маркеры POI
+          // Визуализация тумана войны - затемнение закрытых зон
+          PolygonLayer(
+            polygons: _buildFogOfWarPolygons(),
+            polygonCulling: false,
+          ),
+          // Маркеры POI с разными цветами для открытых/закрытых
           MarkerLayer(
             markers: _pois.map((poi) {
+              final isOpened = _openedPOIIds.contains(poi.id);
               return Marker(
                 point: LatLng(poi.latitude, poi.longitude),
                 width: 40,
                 height: 40,
                 child: Icon(
-                  Icons.place,
-                  color: Colors.red,
+                  isOpened ? Icons.place : Icons.place_outlined,
+                  color: isOpened ? Colors.green : Colors.grey,
                   size: 40,
                 ),
               );
@@ -186,5 +198,56 @@ class _MapScreenState extends State<MapScreen> {
         tooltip: 'Загрузить регион офлайн',
       ),
     );
+  }
+
+  /// Создаёт полигоны для визуализации тумана войны
+  List<Polygon> _buildFogOfWarPolygons() {
+    final polygons = <Polygon>[];
+    
+    // Для каждого закрытого POI создаём затемнённую область вокруг него
+    for (final poi in _pois) {
+      if (!_openedPOIIds.contains(poi.id)) {
+        // Создаём полигон затемнения вокруг закрытого POI
+        final radius = poi.radius ?? 500.0; // Радиус в метрах
+        final points = _createCirclePolygon(
+          poi.latitude,
+          poi.longitude,
+          radius,
+        );
+        
+        polygons.add(Polygon(
+          points: points,
+          color: Colors.black.withOpacity(0.3),
+          borderColor: Colors.black.withOpacity(0.5),
+          borderStrokeWidth: 2,
+          isFilled: true,
+        ));
+      }
+    }
+    
+    return polygons;
+  }
+
+  /// Создаёт полигон окружности вокруг точки
+  List<LatLng> _createCirclePolygon(
+    double centerLat,
+    double centerLon,
+    double radiusMeters,
+  ) {
+    const int points = 32; // Количество точек для окружности
+    final pointsList = <LatLng>[];
+    
+    // Конвертируем радиус из метров в градусы (приблизительно)
+    final latDelta = radiusMeters / 111000.0;
+    final lonDelta = radiusMeters / (111000.0 * math.cos(centerLat * math.pi / 180));
+    
+    for (int i = 0; i < points; i++) {
+      final angle = 2 * math.pi * i / points;
+      final lat = centerLat + latDelta * math.sin(angle);
+      final lon = centerLon + lonDelta * math.cos(angle);
+      pointsList.add(LatLng(lat, lon));
+    }
+    
+    return pointsList;
   }
 }

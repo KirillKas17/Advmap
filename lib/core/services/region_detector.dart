@@ -1,5 +1,6 @@
 import '../database/database_helper.dart';
 import '../models/region.dart';
+import '../config/app_constants.dart';
 import 'dart:math';
 
 /// Сервис для определения региона по координатам
@@ -25,8 +26,25 @@ class RegionDetector {
       }
     }
 
-    // Если не попали ни в один регион, возвращаем ближайший
-    return _findNearestRegion(latitude, longitude, regions);
+    // Если не попали ни в один регион, возвращаем ближайший (если он не слишком далеко)
+    final nearestRegionId = _findNearestRegion(latitude, longitude, regions);
+    
+    // Проверяем, не слишком ли далеко ближайший регион
+    if (nearestRegionId != null) {
+      final nearestRegion = regions.firstWhere(
+        (r) => r.id == nearestRegionId,
+      );
+      final centerLat = (nearestRegion.bounds.north + nearestRegion.bounds.south) / 2;
+      final centerLon = (nearestRegion.bounds.east + nearestRegion.bounds.west) / 2;
+      final distance = _calculateDistance(latitude, longitude, centerLat, centerLon);
+      
+      // Если ближайший регион дальше 50 км, не возвращаем его
+      if (distance > 50000) {
+        return null;
+      }
+    }
+    
+    return nearestRegionId;
   }
 
   /// Проверяет, попадает ли точка в границы региона

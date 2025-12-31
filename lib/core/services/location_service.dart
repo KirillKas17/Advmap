@@ -3,9 +3,12 @@ import 'package:location/location.dart' as loc;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/app_config.dart';
+import '../config/app_constants.dart';
 import '../models/poi.dart';
 import '../database/database_helper.dart';
 import '../models/location_event.dart';
+import '../utils/validators.dart';
+import '../utils/logger.dart';
 import 'region_detector.dart';
 import 'dart:io';
 
@@ -87,11 +90,34 @@ class LocationService {
   }
 
   /// Проверяет, попадает ли позиция в геозону какого-либо POI
+  /// Оптимизированная версия с фильтрацией по региону и радиусу
   Future<String?> checkPOIGeofence(double latitude, double longitude) async {
-    final db = DatabaseHelper.instance;
-    final allPOIs = await db.getAllPOIs();
+    // Валидация координат
+    if (!Validators.isValidCoordinates(latitude, longitude)) {
+      Logger.warning('Некорректные координаты: $latitude, $longitude');
+      return null;
+    }
 
-    for (final poi in allPOIs) {
+    // Сначала определяем регион для фильтрации
+    String? regionId;
+    try {
+      regionId = await detectRegion(latitude, longitude);
+    } catch (e) {
+      Logger.error('Ошибка определения региона', e);
+    }
+
+    // Ищем POI в радиусе от текущей позиции
+    final searchRadius = AppConstants.defaultSearchRadiusMeters;
+    final db = DatabaseHelper.instance;
+    final nearbyPOIs = await db.getPOIsNearby(
+      latitude: latitude,
+      longitude: longitude,
+      radiusMeters: searchRadius,
+      regionId: regionId,
+    );
+
+    // Проверяем попадание в геозоны найденных POI
+    for (final poi in nearbyPOIs) {
       if (poi.isPointInGeofence(latitude, longitude)) {
         return poi.id;
       }
@@ -112,31 +138,44 @@ class LocationService {
     required double longitude,
     required String deviceId,
   }) async {
-    final poiId = await checkPOIGeofence(latitude, longitude);
-    final regionId = await detectRegion(latitude, longitude);
-
-    // Если попали в POI, отмечаем его как открытый
-    if (poiId != null) {
-      final db = DatabaseHelper.instance;
-      final isAlreadyOpened = await db.isPOIOpened(poiId);
-      if (!isAlreadyOpened) {
-        await db.markPOIOpened(poiId);
-      }
+    // Валидация входных данных
+    if (!Validators.isValidCoordinates(latitude, longitude)) {
+      Logger.warning('Попытка создать событие с некорректными координатами');
+      return null;
     }
 
-    final event = LocationEvent(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      latitude: latitude,
-      longitude: longitude,
-      timestamp: DateTime.now(),
-      poiId: poiId,
-      regionId: regionId,
-      deviceId: deviceId,
-      synced: false,
-    );
+    if (!Validators.isValidId(deviceId)) {
+      Logger.warning('Попытка создать событие с некорректным deviceId');
+      return null;
+    }
 
-    await DatabaseHelper.instance.insertLocationEvent(event);
-    return event.id;
+    try {
+      final poiId = await checkPOIGeofence(latitude, longitude);
+      final regionId = await detectRegion(latitude, longitude);
+
+      // Если попали в POI, отмечаем его как открытый (с транзакцией для избежания race condition)
+      if (poiId != null) {
+        final db = DatabaseHelper.instance;
+        await db.markPOIOpenedSafe(poiId);
+      }
+
+      final event = LocationEvent(
+        id: '${DateTime.now().millisecondsSinceEpoch}_${deviceId.substring(0, 8)}',
+        latitude: latitude,
+        longitude: longitude,
+        timestamp: DateTime.now(),
+        poiId: poiId,
+        regionId: regionId,
+        deviceId: deviceId,
+        synced: false,
+      );
+
+      await DatabaseHelper.instance.insertLocationEvent(event);
+      return event.id;
+    } catch (e, stackTrace) {
+      Logger.error('Ошибка создания события геолокации', e, stackTrace);
+      return null;
+    }
   }
 
   /// Включает/выключает фоновое отслеживание

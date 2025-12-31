@@ -42,11 +42,12 @@ class HomeWorkDetector {
     // Определяем тип каждого кластера (дом/работа)
     final locations = <HomeWorkLocation>[];
 
-    for (int i = 0; i < topClusters.length; i++) {
-      final cluster = topClusters[i];
+    // Если только один кластер - определяем его тип
+    if (topClusters.length == 1) {
+      final cluster = topClusters.first;
       final locationType = _classifyCluster(cluster, visitPoints);
-
-      final location = HomeWorkLocation(
+      
+      locations.add(HomeWorkLocation(
         id: '${locationType.toString()}_${DateTime.now().millisecondsSinceEpoch}',
         type: locationType,
         latitude: cluster.centerLatitude,
@@ -54,9 +55,34 @@ class HomeWorkDetector {
         radius: _calculateClusterRadius(cluster),
         detectedAt: DateTime.now(),
         verified: false,
-      );
+      ));
+    } else {
+      // Если два кластера - определяем тип каждого
+      for (int i = 0; i < topClusters.length; i++) {
+        final cluster = topClusters[i];
+        LocationType locationType;
+        
+        if (i == 0) {
+          // Первый кластер - определяем по времени пребывания
+          locationType = _classifyCluster(cluster, visitPoints);
+        } else {
+          // Второй кластер - противоположный тип
+          final firstType = _classifyCluster(topClusters[0], visitPoints);
+          locationType = firstType == LocationType.home 
+              ? LocationType.work 
+              : LocationType.home;
+        }
 
-      locations.add(location);
+        locations.add(HomeWorkLocation(
+          id: '${locationType.toString()}_${DateTime.now().millisecondsSinceEpoch}',
+          type: locationType,
+          latitude: cluster.centerLatitude,
+          longitude: cluster.centerLongitude,
+          radius: _calculateClusterRadius(cluster),
+          detectedAt: DateTime.now(),
+          verified: false,
+        ));
+      }
     }
 
     // Сохраняем обнаруженные места в БД
