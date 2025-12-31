@@ -14,6 +14,10 @@ import 'ui/screens/home_screen.dart';
 import 'ui/screens/map_screen.dart';
 import 'ui/screens/profile_screen.dart';
 import 'core/config/app_config.dart';
+import 'core/navigation/app_router.dart';
+
+// Глобальный ключ навигатора для доступа из сервисов
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,12 +58,14 @@ class ExplorersMapApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Карта Исследователя',
+      navigatorKey: navigatorKey,
       theme: ThemeData(
         primarySwatch: Colors.blue,
         useMaterial3: true,
       ),
       home: const MainNavigationScreen(),
       debugShowCheckedModeBanner: false,
+      onGenerateRoute: AppRouter.generateRoute,
     );
   }
 }

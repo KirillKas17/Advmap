@@ -74,6 +74,7 @@ class POI {
       final xj = polygon[j].latitude;
       final yj = polygon[j].longitude;
       
+      // Проверяем пересечение луча с ребром полигона
       final intersect = ((yi > lon) != (yj > lon)) &&
           (lat < (xj - xi) * (lon - yi) / (yj - yi) + xi);
       if (intersect) inside = !inside;

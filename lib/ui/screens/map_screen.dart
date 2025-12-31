@@ -5,8 +5,10 @@ import 'package:geolocator/geolocator.dart';
 
 import '../../core/services/location_service.dart';
 import '../../core/services/sync_service.dart';
+import '../../core/services/region_detector.dart';
 import '../../core/database/database_helper.dart';
 import '../../core/models/poi.dart';
+import '../widgets/region_selection_dialog.dart';
 
 /// Экран карты с туманом войны
 class MapScreen extends StatefulWidget {
@@ -48,10 +50,30 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _loadPOIs() async {
-    // TODO: Определить текущий регион
+    String? regionId;
+    
+    // Определяем текущий регион по позиции
+    if (_currentPosition != null) {
+      final detector = RegionDetector.instance;
+      regionId = await detector.detectRegion(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+      );
+    }
+
+    // Если регион не определён, используем первый загруженный или дефолтный
+    if (regionId == null) {
+      final db = DatabaseHelper.instance;
+      final cachedRegions = await db.getCachedRegions();
+      if (cachedRegions.isNotEmpty) {
+        regionId = cachedRegions.first.id;
+      } else {
+        regionId = 'default_region';
+      }
+    }
+
     final syncService = SyncService.instance;
-    // Для примера используем тестовый регион
-    final pois = await syncService.loadPOIsForRegion('default_region');
+    final pois = await syncService.loadPOIsForRegion(regionId);
     
     setState(() {
       _pois = pois;
@@ -149,16 +171,15 @@ class _MapScreenState extends State<MapScreen> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
-          // Загрузить регион для офлайн-доступа
-          final syncService = SyncService.instance;
-          // TODO: Показать диалог выбора региона
-          await syncService.downloadRegionForOffline('default_region');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Регион загружен для офлайн-доступа'),
-              ),
-            );
+          // Показываем диалог выбора региона
+          final result = await showDialog<bool>(
+            context: context,
+            builder: (context) => const RegionSelectionDialog(),
+          );
+          
+          if (result == true && mounted) {
+            // Обновляем список POI после загрузки региона
+            await _loadPOIs();
           }
         },
         child: const Icon(Icons.download),

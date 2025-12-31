@@ -1,8 +1,13 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/material.dart';
 
 import '../models/achievement.dart';
+import '../navigation/app_router.dart';
+import '../services/sync_service.dart';
+import '../../main.dart';
+import '../utils/logger.dart';
 
 /// Сервис для работы с push-уведомлениями
 class PushNotificationService {
@@ -61,22 +66,54 @@ class PushNotificationService {
 
   /// Обработка уведомления при нажатии
   void _onNotificationTapped(NotificationResponse response) {
-    // TODO: Навигация к соответствующему экрану
+    if (response.payload != null) {
+      // Если payload содержит ID достижения, открываем его
+      final achievementId = response.payload;
+      if (achievementId != null && achievementId.isNotEmpty) {
+        _navigateToAchievement(achievementId);
+      }
+    }
+  }
+
+  void _navigateToAchievement(String achievementId) {
+    // Навигация выполняется через глобальный navigatorKey
+    try {
+      final context = navigatorKey.currentContext;
+      if (context != null) {
+        // В реальном приложении здесь будет загрузка достижения по ID
+        // и навигация к экрану деталей
+        AppRouter.navigateToAchievement(
+          context,
+          Achievement(
+            id: achievementId,
+            title: 'Достижение',
+            description: 'Описание достижения',
+            category: 'general',
+          ),
+        );
+      }
+    } catch (e) {
+      Logger.error('Ошибка навигации к достижению', e);
+    }
   }
 
   /// Обработка сообщения в foreground
   Future<void> _handleForegroundMessage(RemoteMessage message) async {
     // Показываем локальное уведомление
+    final achievementId = message.data['achievement_id'] as String?;
     await _showLocalNotification(
       title: message.notification?.title ?? 'Новое уведомление',
       body: message.notification?.body ?? '',
-      payload: message.data.toString(),
+      payload: achievementId ?? message.data.toString(),
     );
   }
 
   /// Обработка сообщения при открытии из фона
   void _handleBackgroundMessage(RemoteMessage message) {
-    // TODO: Навигация к соответствующему экрану
+    final achievementId = message.data['achievement_id'] as String?;
+    if (achievementId != null && achievementId.isNotEmpty) {
+      _navigateToAchievement(achievementId);
+    }
   }
 
   /// Показывает локальное уведомление
@@ -114,7 +151,24 @@ class PushNotificationService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('fcm_token', token);
 
-    // TODO: Отправить токен на сервер для регистрации устройства
+    // Отправляем токен на сервер для регистрации устройства
+    await _registerDeviceToken(token);
+  }
+
+  /// Регистрирует токен устройства на сервере
+  Future<void> _registerDeviceToken(String token) async {
+    try {
+      final syncService = SyncService.instance;
+      final hasInternet = await syncService.checkInternetConnection();
+      
+      if (hasInternet) {
+        // Отправляем токен на сервер
+        await syncService.registerDeviceToken(token);
+      }
+    } catch (e) {
+      // Ошибка регистрации токена не критична
+      // Токен будет отправлен при следующей синхронизации
+    }
   }
 
   /// Получает сохранённый FCM токен

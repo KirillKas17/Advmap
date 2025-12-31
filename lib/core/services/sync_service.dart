@@ -6,6 +6,9 @@ import '../config/app_config.dart';
 import '../database/database_helper.dart';
 import '../models/location_event.dart';
 import '../models/poi.dart';
+import '../models/region.dart';
+import '../utils/logger.dart';
+import 'dart:convert';
 
 /// Сервис синхронизации данных с сервером
 class SyncService {
@@ -59,8 +62,9 @@ class SyncService {
       }
 
       return false;
-    } catch (e) {
+    } catch (e, stackTrace) {
       // Ошибка синхронизации - события останутся в очереди
+      Logger.error('Ошибка синхронизации событий', e, stackTrace);
       return false;
     }
   }
@@ -90,8 +94,9 @@ class SyncService {
       }
 
       return [];
-    } catch (e) {
+    } catch (e, stackTrace) {
       // При ошибке возвращаем кэш
+      Logger.error('Ошибка загрузки POI региона', e, stackTrace);
       final db = DatabaseHelper.instance;
       return await db.getPOIsByRegion(regionId);
     }
@@ -115,12 +120,31 @@ class SyncService {
         final mapData = response.data;
         // Сохраняем данные карты в локальную БД
         final db = DatabaseHelper.instance;
-        // TODO: Реализовать сохранение данных карты
+        final mapDataJson = jsonEncode(mapData);
+        await db.updateRegionMapData(regionId, mapDataJson);
+        
+        // Если региона нет в кэше, создаём запись
+        final existingRegion = await db.getCachedRegion(regionId);
+        if (existingRegion == null) {
+          // Создаём регион с базовыми данными
+          final region = Region(
+            id: regionId,
+            name: mapData['name'] as String? ?? regionId,
+            bounds: RegionBounds.fromJson(
+              mapData['bounds'] as Map<String, dynamic>,
+            ),
+            downloadedAt: DateTime.now(),
+            lastUpdated: DateTime.now(),
+          );
+          await db.insertCachedRegion(region, mapData: mapDataJson);
+        }
+        
         return true;
       }
 
       return false;
-    } catch (e) {
+    } catch (e, stackTrace) {
+      Logger.error('Ошибка загрузки региона', e, stackTrace);
       return false;
     }
   }
@@ -138,7 +162,27 @@ class SyncService {
         data: {'achievement_id': achievementId},
       );
       return true;
-    } catch (e) {
+    } catch (e, stackTrace) {
+      Logger.error('Ошибка отправки достижения', e, stackTrace);
+      return false;
+    }
+  }
+
+  /// Регистрирует FCM токен устройства на сервере
+  Future<bool> registerDeviceToken(String token) async {
+    final hasInternet = await checkInternetConnection();
+    if (!hasInternet) {
+      return false;
+    }
+
+    try {
+      await _dio.post(
+        '/api/v1/devices/register',
+        data: {'fcm_token': token},
+      );
+      return true;
+    } catch (e, stackTrace) {
+      Logger.error('Ошибка регистрации токена устройства', e, stackTrace);
       return false;
     }
   }

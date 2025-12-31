@@ -6,6 +6,7 @@ import '../config/app_config.dart';
 import '../models/poi.dart';
 import '../database/database_helper.dart';
 import '../models/location_event.dart';
+import 'region_detector.dart';
 import 'dart:io';
 
 /// Сервис для работы с геолокацией
@@ -99,13 +100,10 @@ class LocationService {
     return null;
   }
 
-  /// Определяет регион по координатам (упрощённая логика)
+  /// Определяет регион по координатам
   Future<String?> detectRegion(double latitude, double longitude) async {
-    // Здесь должна быть логика определения региона
-    // Для примера используем простую проверку по загруженным регионам
-    final db = DatabaseHelper.instance;
-    // TODO: Реализовать определение региона по границам
-    return null;
+    final detector = RegionDetector.instance;
+    return await detector.detectRegion(latitude, longitude);
   }
 
   /// Создаёт событие геолокации и сохраняет в БД
@@ -116,6 +114,15 @@ class LocationService {
   }) async {
     final poiId = await checkPOIGeofence(latitude, longitude);
     final regionId = await detectRegion(latitude, longitude);
+
+    // Если попали в POI, отмечаем его как открытый
+    if (poiId != null) {
+      final db = DatabaseHelper.instance;
+      final isAlreadyOpened = await db.isPOIOpened(poiId);
+      if (!isAlreadyOpened) {
+        await db.markPOIOpened(poiId);
+      }
+    }
 
     final event = LocationEvent(
       id: DateTime.now().millisecondsSinceEpoch.toString(),

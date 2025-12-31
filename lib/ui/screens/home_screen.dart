@@ -40,9 +40,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final locations = await db.getHomeWorkLocations(verifiedOnly: true);
     
     // Подсчитываем посещённые POI
-    final allPOIs = await db.getAllPOIs();
-    // TODO: Получить список открытых POI с сервера или из локальной БД
-    _totalVisitedPOIs = allPOIs.length; // Временная заглушка
+    _totalVisitedPOIs = await db.getOpenedPOIsCount();
 
     setState(() {
       _homeWorkLocations = locations;
@@ -163,20 +161,26 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildStatItem(
-                  'Открыто мест',
-                  _totalVisitedPOIs.toString(),
-                  Icons.place,
-                ),
-                _buildStatItem(
-                  'Регионов',
-                  '0', // TODO: Реализовать подсчёт
-                  Icons.map,
-                ),
-              ],
+            FutureBuilder<int>(
+              future: db.getRegionsCount(),
+              builder: (context, snapshot) {
+                final regionsCount = snapshot.data ?? 0;
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildStatItem(
+                      'Открыто мест',
+                      _totalVisitedPOIs.toString(),
+                      Icons.place,
+                    ),
+                    _buildStatItem(
+                      'Регионов',
+                      regionsCount.toString(),
+                      Icons.map,
+                    ),
+                  ],
+                );
+              },
             ),
           ],
         ),

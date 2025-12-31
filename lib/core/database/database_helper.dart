@@ -6,6 +6,7 @@ import 'dart:convert';
 import '../models/location_event.dart';
 import '../models/home_work_location.dart';
 import '../models/poi.dart';
+import '../models/region.dart';
 
 /// Хелпер для работы с локальной SQLite БД
 class DatabaseHelper {
@@ -92,6 +93,18 @@ class DatabaseHelper {
         last_updated INTEGER NOT NULL
       )
     ''');
+
+    // Таблица открытых POI пользователем
+    await db.execute('''
+      CREATE TABLE opened_pois (
+        poi_id TEXT PRIMARY KEY,
+        opened_at INTEGER NOT NULL,
+        FOREIGN KEY (poi_id) REFERENCES pois(id)
+      )
+    ''');
+
+    // Индексы
+    await db.execute('CREATE INDEX idx_opened_pois_opened_at ON opened_pois(opened_at)');
 
     // Индексы для оптимизации запросов
     await db.execute('CREATE INDEX idx_location_events_synced ON location_events(synced, timestamp)');
@@ -343,6 +356,121 @@ class DatabaseHelper {
     ]);
 
     return results;
+  }
+
+  // ========== Методы для работы с регионами ==========
+
+  Future<void> insertCachedRegion(Region region, {String? mapData}) async {
+    final db = await database;
+    await db.insert(
+      'cached_regions',
+      {
+        'id': region.id,
+        'name': region.name,
+        'bounds': jsonEncode(region.bounds.toJson()),
+        'map_data': mapData,
+        'downloaded_at': region.downloadedAt?.millisecondsSinceEpoch ??
+            DateTime.now().millisecondsSinceEpoch,
+        'last_updated': region.lastUpdated?.millisecondsSinceEpoch ??
+            DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<Region>> getCachedRegions() async {
+    final db = await database;
+    final results = await db.query('cached_regions');
+
+    return results.map((row) => _regionFromMap(row)).toList();
+  }
+
+  Future<Region?> getCachedRegion(String regionId) async {
+    final db = await database;
+    final results = await db.query(
+      'cached_regions',
+      where: 'id = ?',
+      whereArgs: [regionId],
+      limit: 1,
+    );
+
+    if (results.isEmpty) return null;
+    return _regionFromMap(results.first);
+  }
+
+  Region _regionFromMap(Map<String, dynamic> map) {
+    final boundsJson = jsonDecode(map['bounds'] as String) as Map<String, dynamic>;
+    return Region(
+      id: map['id'] as String,
+      name: map['name'] as String,
+      bounds: RegionBounds.fromJson(boundsJson),
+      downloadedAt: map['downloaded_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['downloaded_at'] as int)
+          : null,
+      lastUpdated: map['last_updated'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['last_updated'] as int)
+          : null,
+    );
+  }
+
+  Future<void> updateRegionMapData(String regionId, String mapData) async {
+    final db = await database;
+    await db.update(
+      'cached_regions',
+      {
+        'map_data': mapData,
+        'last_updated': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [regionId],
+    );
+  }
+
+  // ========== Методы для работы с открытыми POI ==========
+
+  Future<void> markPOIOpened(String poiId) async {
+    final db = await database;
+    await db.insert(
+      'opened_pois',
+      {
+        'poi_id': poiId,
+        'opened_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<bool> isPOIOpened(String poiId) async {
+    final db = await database;
+    final results = await db.query(
+      'opened_pois',
+      where: 'poi_id = ?',
+      whereArgs: [poiId],
+      limit: 1,
+    );
+    return results.isNotEmpty;
+  }
+
+  Future<int> getOpenedPOIsCount() async {
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM opened_pois',
+    );
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
+
+  Future<int> getRegionsCount() async {
+    final db = await database;
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) as count FROM cached_regions',
+    );
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
+
+  Future<List<String>> getOpenedPOIIds() async {
+    final db = await database;
+    final results = await db.query('opened_pois');
+    return results.map((row) => row['poi_id'] as String).toList();
   }
 
   Future<void> close() async {

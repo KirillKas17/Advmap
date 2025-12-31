@@ -7,6 +7,7 @@ import '../config/app_config.dart';
 import 'location_service.dart';
 import '../database/database_helper.dart';
 import 'sync_service.dart';
+import '../utils/logger.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
 /// Top-level функция для фонового воркера
@@ -19,10 +20,11 @@ void callbackDispatcher() {
         return Future.value(true);
       }
       return Future.value(false);
-    } catch (e) {
-      return Future.value(false);
-    }
-  });
+  } catch (e, stackTrace) {
+    Logger.error('Ошибка в фоновом воркере', e, stackTrace);
+    return Future.value(false);
+  }
+});
 }
 
 /// Выполняет фоновое отслеживание геолокации
