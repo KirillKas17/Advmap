@@ -82,14 +82,41 @@ class GeolocationService:
         self.db.commit()
         self.db.refresh(location_point)
 
-        # Обновить прогресс квестов при добавлении точки геолокации
-        try:
-            from app.services.quest import QuestService
-            quest_service = QuestService(self.db)
-            from app.models.event import UserQuest, QuestStatus
-            from app.models.location import LocationSession
-            session = self.db.query(LocationSession).filter(LocationSession.id == session_id).first()
-            if session:
+        # Получаем сессию для обработки траектории
+        session = self.db.query(LocationSession).filter(LocationSession.id == session_id).first()
+        if session:
+            # Обработка открытия Area POI по траектории
+            try:
+                from app.services.area_discovery import AreaDiscoveryService
+                area_discovery_service = AreaDiscoveryService(self.db)
+                
+                # Получаем последние точки сессии для обработки траектории
+                recent_points = (
+                    self.db.query(LocationPoint)
+                    .filter(LocationPoint.session_id == session_id)
+                    .order_by(LocationPoint.timestamp.desc())
+                    .limit(50)  # Обрабатываем последние 50 точек
+                    .all()
+                )
+                
+                if len(recent_points) >= 2:
+                    # Обрабатываем траекторию и открываем Area POI
+                    discovery_events = area_discovery_service.process_location_trajectory(
+                        user_id=session.user_id,
+                        location_points=recent_points,
+                        company_id=company_id,
+                    )
+                    
+                    if discovery_events:
+                        logger.info(f"Открыто {len(discovery_events)} Area POI для пользователя {session.user_id}")
+            except Exception as e:
+                logger.warning(f"Ошибка при обработке Area POI discovery: {e}")
+
+            # Обновить прогресс квестов при добавлении точки геолокации
+            try:
+                from app.services.quest import QuestService
+                quest_service = QuestService(self.db)
+                from app.models.event import UserQuest, QuestStatus
                 active_quests = (
                     self.db.query(UserQuest)
                     .filter(
@@ -105,8 +132,8 @@ class GeolocationService:
                         quest_id=user_quest.quest_id,
                         company_id=company_id,
                     )
-        except Exception as e:
-            logger.warning(f"Ошибка при обновлении прогресса квестов: {e}")
+            except Exception as e:
+                logger.warning(f"Ошибка при обновлении прогресса квестов: {e}")
 
         return location_point
 

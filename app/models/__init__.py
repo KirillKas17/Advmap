@@ -1,6 +1,6 @@
 """Модели базы данных."""
 from app.models.achievement import Achievement, UserAchievement
-from app.models.geozone import Geozone, GeozoneVisit
+from app.models.geozone import Geozone, GeozoneVisit, AreaDiscovery
 from app.models.location import LocationPoint, LocationSession
 from app.models.user import User
 from app.models.user_home_work import UserHomeWork
@@ -22,6 +22,7 @@ __all__ = [
     "UserAchievement",
     "Geozone",
     "GeozoneVisit",
+    "AreaDiscovery",
     "LocationPoint",
     "LocationSession",
     "UserHomeWork",
