@@ -9,8 +9,14 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user
 from app.core.database import get_db
 from app.models.user import User
-from app.schemas.geozone import GeozoneCreate, GeozoneResponse, GeozoneVisitResponse
+from app.schemas.geozone import (
+    GeozoneCreate,
+    GeozoneResponse,
+    GeozoneVisitResponse,
+    AreaDiscoveryResponse,
+)
 from app.services.geozone import GeozoneService
+from app.services.area_discovery import AreaDiscoveryService
 
 router = APIRouter(prefix="/geozone", tags=["geozone"])
 logger = logging.getLogger(__name__)
@@ -185,3 +191,53 @@ def get_my_visits(
         offset=offset,
     )
     return visits
+
+
+@router.get("/area-discoveries/my", response_model=List[AreaDiscoveryResponse])
+def get_my_area_discoveries(
+    geozone_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Получить мои открытия Area POI с пагинацией."""
+    if limit > 1000:
+        limit = 1000
+    if limit < 1:
+        limit = 1
+    if offset < 0:
+        offset = 0
+    
+    service = AreaDiscoveryService(db)
+    discoveries = service.get_user_discoveries(
+        user_id=current_user.id,
+        geozone_id=geozone_id,
+        status=status,
+        company_id=current_user.company_id,
+        limit=limit,
+        offset=offset,
+    )
+    return discoveries
+
+
+@router.get("/area-discoveries/{geozone_id}", response_model=Optional[AreaDiscoveryResponse])
+def get_area_discovery(
+    geozone_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Получить открытие Area POI по ID геозоны."""
+    service = AreaDiscoveryService(db)
+    discovery = service.get_discovery_by_geozone(
+        user_id=current_user.id,
+        geozone_id=geozone_id,
+        company_id=current_user.company_id,
+    )
+    if not discovery:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Открытие области не найдено",
+        )
+    return discovery

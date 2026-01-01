@@ -1,6 +1,6 @@
 """Схемы геозон."""
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -60,6 +60,42 @@ class GeozoneVisitResponse(BaseModel):
     verification_score: Optional[int] = None
     created_at: datetime
     updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AreaDiscoveryResponse(BaseModel):
+    """Схема ответа с открытием области."""
+
+    id: int
+    user_id: int
+    geozone_id: int
+    discovery_status: str
+    progress_percent: float
+    time_spent_seconds: int
+    area_covered_meters: float
+    first_discovered_at: datetime
+    last_updated_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    geozone: Optional[GeozoneResponse] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AreaDiscoveryEventResponse(BaseModel):
+    """Схема события открытия области."""
+
+    type: str
+    area_type: str
+    name: str
+    geozone_id: int
+    progress: float
+    status: str
+    old_status: Optional[str] = None
+    reward: Dict[str, Any]
 
     class Config:
         from_attributes = True

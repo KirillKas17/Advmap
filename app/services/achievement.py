@@ -218,3 +218,54 @@ class AchievementService:
         if company_id is not None:
             query = query.filter(Achievement.company_id == company_id)
         return query.first()
+
+    def add_user_xp(
+        self,
+        user_id: int,
+        xp_amount: int,
+        company_id: Optional[int] = None,
+    ) -> bool:
+        """
+        Добавить XP пользователю.
+        XP хранится в UserCurrency как coins (или можно добавить отдельное поле XP).
+        
+        Args:
+            user_id: ID пользователя
+            xp_amount: Количество XP для добавления
+            company_id: ID компании
+            
+        Returns:
+            True если успешно, False в случае ошибки
+        """
+        try:
+            from app.models.marketplace import UserCurrency
+            
+            # Получаем или создаём UserCurrency для пользователя
+            user_currency = (
+                self.db.query(UserCurrency)
+                .filter(UserCurrency.user_id == user_id)
+                .first()
+            )
+            
+            if not user_currency:
+                user_currency = UserCurrency(
+                    user_id=user_id,
+                    coins=xp_amount,
+                    gems=0,
+                    company_id=company_id,
+                )
+                self.db.add(user_currency)
+            else:
+                user_currency.coins += xp_amount
+            
+            self.db.commit()
+            self.db.refresh(user_currency)
+            
+            logger.info(f"Добавлено {xp_amount} XP пользователю {user_id} (текущий баланс: {user_currency.coins})")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении XP пользователю {user_id}: {e}", exc_info=True)
+            self.db.rollback()
+            return False

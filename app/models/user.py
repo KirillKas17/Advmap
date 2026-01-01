@@ -29,6 +29,7 @@ class User(Base):
     # Relationships
     achievements = relationship("UserAchievement", back_populates="user", cascade="all, delete-orphan")
     geozone_visits = relationship("GeozoneVisit", back_populates="user", cascade="all, delete-orphan")
+    area_discoveries = relationship("AreaDiscovery", back_populates="user", cascade="all, delete-orphan")
     location_sessions = relationship("LocationSession", back_populates="user", cascade="all, delete-orphan")
     home_work_locations = relationship("UserHomeWork", back_populates="user", cascade="all, delete-orphan")
     artifacts = relationship("UserArtifact", back_populates="user", cascade="all, delete-orphan")
