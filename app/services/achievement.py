@@ -1,0 +1,140 @@
+"""Сервис достижений."""
+from datetime import datetime
+from typing import List, Optional
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.models.achievement import Achievement, UserAchievement
+from app.models.geozone import GeozoneVisit
+
+settings = get_settings()
+
+
+class AchievementService:
+    """Сервис для работы с достижениями."""
+
+    def __init__(self, db: Session):
+        """Инициализация сервиса."""
+        self.db = db
+
+    def create_achievement(
+        self,
+        name: str,
+        achievement_type: str,
+        description: Optional[str] = None,
+        icon_url: Optional[str] = None,
+        requirement_value: Optional[int] = None,
+        geozone_id: Optional[int] = None,
+        company_id: Optional[int] = None,
+    ) -> Achievement:
+        """Создать новое достижение."""
+        achievement = Achievement(
+            name=name,
+            description=description,
+            icon_url=icon_url,
+            achievement_type=achievement_type,
+            requirement_value=requirement_value,
+            geozone_id=geozone_id,
+            company_id=company_id,
+        )
+        self.db.add(achievement)
+        self.db.commit()
+        self.db.refresh(achievement)
+        return achievement
+
+    def check_and_unlock_achievements(
+        self, user_id: int, company_id: Optional[int] = None
+    ) -> List[UserAchievement]:
+        """Проверить и разблокировать достижения пользователя."""
+        unlocked_achievements = []
+
+        # Получить все активные достижения
+        query = self.db.query(Achievement).filter(Achievement.is_active.is_(True))
+
+        if company_id is not None:
+            query = query.filter(Achievement.company_id == company_id)
+
+        achievements = query.all()
+
+        for achievement in achievements:
+            # Проверить, не разблокировано ли уже
+            existing = (
+                self.db.query(UserAchievement)
+                .filter(
+                    UserAchievement.user_id == user_id,
+                    UserAchievement.achievement_id == achievement.id,
+                )
+                .first()
+            )
+
+            if existing:
+                continue
+
+            # Проверить условие разблокировки
+            progress = self._calculate_achievement_progress(user_id, achievement, company_id)
+
+            if progress >= (achievement.requirement_value or 1):
+                user_achievement = UserAchievement(
+                    user_id=user_id,
+                    achievement_id=achievement.id,
+                    unlocked_at=datetime.utcnow(),
+                    progress_value=progress,
+                    company_id=company_id,
+                )
+                self.db.add(user_achievement)
+                unlocked_achievements.append(user_achievement)
+
+        if unlocked_achievements:
+            self.db.commit()
+            for ua in unlocked_achievements:
+                self.db.refresh(ua)
+
+        return unlocked_achievements
+
+    def _calculate_achievement_progress(
+        self, user_id: int, achievement: Achievement, company_id: Optional[int] = None
+    ) -> int:
+        """Вычислить прогресс достижения."""
+        if achievement.achievement_type == "geozone":
+            if achievement.geozone_id:
+                query = (
+                    self.db.query(func.count(GeozoneVisit.id))
+                    .filter(
+                        GeozoneVisit.user_id == user_id,
+                        GeozoneVisit.geozone_id == achievement.geozone_id,
+                    )
+                )
+                if company_id is not None:
+                    query = query.filter(GeozoneVisit.company_id == company_id)
+                return query.scalar() or 0
+
+        elif achievement.achievement_type == "visits":
+            query = self.db.query(func.count(GeozoneVisit.id)).filter(
+                GeozoneVisit.user_id == user_id
+            )
+            if company_id is not None:
+                query = query.filter(GeozoneVisit.company_id == company_id)
+            return query.scalar() or 0
+
+        elif achievement.achievement_type == "distance":
+            # Здесь можно добавить логику подсчета расстояния
+            return 0
+
+        return 0
+
+    def get_user_achievements(
+        self, user_id: int, company_id: Optional[int] = None
+    ) -> List[UserAchievement]:
+        """Получить достижения пользователя."""
+        query = self.db.query(UserAchievement).filter(UserAchievement.user_id == user_id)
+
+        if company_id is not None:
+            query = query.filter(UserAchievement.company_id == company_id)
+
+        return query.order_by(UserAchievement.unlocked_at.desc()).all()
+
+    def get_achievement_by_id(self, achievement_id: int) -> Optional[Achievement]:
+        """Получить достижение по ID."""
+        return self.db.query(Achievement).filter(Achievement.id == achievement_id).first()
