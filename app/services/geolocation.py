@@ -1,5 +1,6 @@
 """Сервис геолокации."""
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from geoalchemy2.shape import from_shape, to_shape
@@ -12,6 +13,7 @@ from app.core.config import get_settings
 from app.models.location import LocationPoint, LocationSession
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class GeolocationService:
@@ -31,7 +33,7 @@ class GeolocationService:
         """Создать новую сессию геолокации."""
         session = LocationSession(
             user_id=user_id,
-            session_started_at=datetime.utcnow(),
+            session_started_at=datetime.now(timezone.utc),
             is_background=is_background,
             is_offline=is_offline,
             company_id=company_id,
@@ -58,7 +60,7 @@ class GeolocationService:
     ) -> LocationPoint:
         """Добавить точку геолокации."""
         if timestamp is None:
-            timestamp = datetime.utcnow()
+            timestamp = datetime.now(timezone.utc)
 
         point = Point(longitude, latitude)
         location_point = LocationPoint(
@@ -79,6 +81,33 @@ class GeolocationService:
         self.db.add(location_point)
         self.db.commit()
         self.db.refresh(location_point)
+
+        # Обновить прогресс квестов при добавлении точки геолокации
+        try:
+            from app.services.quest import QuestService
+            quest_service = QuestService(self.db)
+            from app.models.event import UserQuest, QuestStatus
+            from app.models.location import LocationSession
+            session = self.db.query(LocationSession).filter(LocationSession.id == session_id).first()
+            if session:
+                active_quests = (
+                    self.db.query(UserQuest)
+                    .filter(
+                        UserQuest.user_id == session.user_id,
+                        UserQuest.status == QuestStatus.IN_PROGRESS
+                    )
+                )
+                if company_id is not None:
+                    active_quests = active_quests.filter(UserQuest.company_id == company_id)
+                for user_quest in active_quests.all():
+                    quest_service.update_quest_progress(
+                        user_id=session.user_id,
+                        quest_id=user_quest.quest_id,
+                        company_id=company_id,
+                    )
+        except Exception as e:
+            logger.warning(f"Ошибка при обновлении прогресса квестов: {e}")
+
         return location_point
 
     def get_user_location_points(
@@ -86,10 +115,11 @@ class GeolocationService:
         user_id: int,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
-        limit: int = 1000,
+        limit: int = 100,
+        offset: int = 0,
         company_id: Optional[int] = None,
     ) -> List[LocationPoint]:
-        """Получить точки геолокации пользователя."""
+        """Получить точки геолокации пользователя с пагинацией."""
         query = (
             self.db.query(LocationPoint)
             .join(LocationSession)
@@ -104,7 +134,7 @@ class GeolocationService:
         if end_time:
             query = query.filter(LocationPoint.timestamp <= end_time)
 
-        return query.order_by(LocationPoint.timestamp.desc()).limit(limit).all()
+        return query.order_by(LocationPoint.timestamp.desc()).offset(offset).limit(limit).all()
 
     def get_last_location_point(
         self, user_id: int, company_id: Optional[int] = None
@@ -133,7 +163,7 @@ class GeolocationService:
         """Завершить сессию геолокации."""
         session = self.db.query(LocationSession).filter(LocationSession.id == session_id).first()
         if session:
-            session.session_ended_at = datetime.utcnow()
+            session.session_ended_at = datetime.now(timezone.utc)
             if synced_at:
                 session.synced_at = synced_at
             self.db.commit()

@@ -1,9 +1,9 @@
 """Модель определения дома и работы пользователя."""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from geoalchemy2 import Geometry
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -28,8 +28,8 @@ class UserHomeWork(Base):
     last_updated_at = Column(DateTime, nullable=False)
     is_confirmed = Column(Boolean, default=False, nullable=False)
     company_id = Column(Integer, nullable=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="home_work_locations")

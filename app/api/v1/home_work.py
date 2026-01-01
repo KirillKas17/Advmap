@@ -1,4 +1,5 @@
 """API endpoints для определения дома/работы."""
+import logging
 from datetime import datetime
 from typing import List, Optional
 
@@ -12,6 +13,7 @@ from app.schemas.home_work import UserHomeWorkResponse
 from app.services.home_work import HomeWorkDetectionService
 
 router = APIRouter(prefix="/home-work", tags=["home-work"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/", response_model=List[UserHomeWorkResponse])

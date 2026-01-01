@@ -33,7 +33,15 @@ def get_current_user(
             detail="Неверный токен аутентификации",
         )
 
-    user = db.query(User).filter(User.id == user_id, User.is_active.is_(True)).first()
+    user = (
+        db.query(User)
+        .filter(
+            User.id == user_id,
+            User.is_active.is_(True),
+            User.deleted_at.is_(None)
+        )
+        .first()
+    )
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

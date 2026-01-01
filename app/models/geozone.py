@@ -1,9 +1,9 @@
 """Модели геозон."""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from geoalchemy2 import Geometry
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -24,8 +24,8 @@ class Geozone(Base):
     geozone_type = Column(String(50), nullable=False, index=True)  # landmark, city, region, custom
     is_active = Column(Boolean, default=True, nullable=False)
     company_id = Column(Integer, nullable=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     deleted_at = Column(DateTime, nullable=True)
 
     # Relationships
@@ -49,8 +49,8 @@ class GeozoneVisit(Base):
     is_verified = Column(Boolean, default=False, nullable=False)
     verification_score = Column(Integer, nullable=True)  # 0-100
     company_id = Column(Integer, nullable=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     # Relationships
     user = relationship("User", back_populates="geozone_visits")

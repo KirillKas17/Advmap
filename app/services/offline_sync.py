@@ -1,5 +1,6 @@
 """Сервис синхронизации офлайн данных."""
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from app.services.geolocation import GeolocationService
 from app.services.gps_spoofing import GPSSpoofingDetectionService
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class OfflineSyncService:
@@ -48,6 +50,7 @@ class OfflineSyncService:
             LocationSession: Созданная или обновленная сессия
         """
         if not points_data:
+            logger.warning("Попытка синхронизации пустого списка точек")
             raise ValueError("Список точек не может быть пустым")
 
         # Сортировать точки по времени
@@ -118,10 +121,11 @@ class OfflineSyncService:
         # Обновить сессию
         session.session_started_at = first_timestamp
         session.session_ended_at = last_timestamp
-        session.synced_at = datetime.utcnow()
+        session.synced_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(session)
 
+        logger.info(f"Синхронизировано {len(synced_points)} точек для пользователя {user_id}, сессия {session.id}")
         return session
 
     def batch_sync_offline_data(
