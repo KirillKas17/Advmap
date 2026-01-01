@@ -120,6 +120,45 @@ class GeozoneService:
         self.db.add(visit)
         self.db.commit()
         self.db.refresh(visit)
+
+        # Попытаться выдать артефакт при посещении геозоны
+        try:
+            from app.services.artifact import ArtifactService
+            artifact_service = ArtifactService(self.db)
+            dropped_artifact = artifact_service.try_drop_artifact_from_geozone(
+                user_id=user_id,
+                geozone_id=geozone_id,
+                company_id=company_id,
+            )
+            if dropped_artifact:
+                logger.info(f"Артефакт выпал при посещении геозоны {geozone_id} пользователем {user_id}")
+        except Exception as e:
+            logger.warning(f"Ошибка при выдаче артефакта: {e}")
+
+        # Обновить прогресс квестов
+        try:
+            from app.services.quest import QuestService
+            quest_service = QuestService(self.db)
+            # Получить активные квесты пользователя
+            from app.models.event import UserQuest, QuestStatus
+            active_quests = (
+                self.db.query(UserQuest)
+                .filter(
+                    UserQuest.user_id == user_id,
+                    UserQuest.status == QuestStatus.IN_PROGRESS
+                )
+            )
+            if company_id is not None:
+                active_quests = active_quests.filter(UserQuest.company_id == company_id)
+            for user_quest in active_quests.all():
+                quest_service.update_quest_progress(
+                    user_id=user_id,
+                    quest_id=user_quest.quest_id,
+                    company_id=company_id,
+                )
+        except Exception as e:
+            logger.warning(f"Ошибка при обновлении прогресса квестов: {e}")
+
         return visit
 
     def end_geozone_visit(

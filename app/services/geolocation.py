@@ -81,6 +81,33 @@ class GeolocationService:
         self.db.add(location_point)
         self.db.commit()
         self.db.refresh(location_point)
+
+        # Обновить прогресс квестов при добавлении точки геолокации
+        try:
+            from app.services.quest import QuestService
+            quest_service = QuestService(self.db)
+            from app.models.event import UserQuest, QuestStatus
+            from app.models.location import LocationSession
+            session = self.db.query(LocationSession).filter(LocationSession.id == session_id).first()
+            if session:
+                active_quests = (
+                    self.db.query(UserQuest)
+                    .filter(
+                        UserQuest.user_id == session.user_id,
+                        UserQuest.status == QuestStatus.IN_PROGRESS
+                    )
+                )
+                if company_id is not None:
+                    active_quests = active_quests.filter(UserQuest.company_id == company_id)
+                for user_quest in active_quests.all():
+                    quest_service.update_quest_progress(
+                        user_id=session.user_id,
+                        quest_id=user_quest.quest_id,
+                        company_id=company_id,
+                    )
+        except Exception as e:
+            logger.warning(f"Ошибка при обновлении прогресса квестов: {e}")
+
         return location_point
 
     def get_user_location_points(

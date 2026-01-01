@@ -101,6 +101,29 @@ class AchievementService:
             for ua in unlocked_achievements:
                 self.db.refresh(ua)
 
+            # Обновить прогресс квестов при разблокировке достижений
+            try:
+                from app.services.quest import QuestService
+                quest_service = QuestService(self.db)
+                from app.models.event import UserQuest, QuestStatus
+                active_quests = (
+                    self.db.query(UserQuest)
+                    .filter(
+                        UserQuest.user_id == user_id,
+                        UserQuest.status == QuestStatus.IN_PROGRESS
+                    )
+                )
+                if company_id is not None:
+                    active_quests = active_quests.filter(UserQuest.company_id == company_id)
+                for user_quest in active_quests.all():
+                    quest_service.update_quest_progress(
+                        user_id=user_id,
+                        quest_id=user_quest.quest_id,
+                        company_id=company_id,
+                    )
+            except Exception as e:
+                logger.warning(f"Ошибка при обновлении прогресса квестов: {e}")
+
         return unlocked_achievements
 
     def _calculate_achievement_progress(
@@ -195,7 +218,3 @@ class AchievementService:
         if company_id is not None:
             query = query.filter(Achievement.company_id == company_id)
         return query.first()
-
-    def get_achievement_by_id(self, achievement_id: int) -> Optional[Achievement]:
-        """Получить достижение по ID."""
-        return self.db.query(Achievement).filter(Achievement.id == achievement_id).first()

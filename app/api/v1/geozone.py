@@ -106,17 +106,25 @@ def check_point_in_geozone(
     is_inside = service.check_point_in_geozone(latitude, longitude, geozone_id)
 
     if is_inside:
-        # Создать запись о посещении
-        visit = service.create_geozone_visit(
-            user_id=current_user.id,
-            geozone_id=geozone_id,
-            company_id=current_user.company_id,
-        )
-        return {
-            "is_inside": True,
-            "visit_id": visit.id,
-            "message": "Вы находитесь в геозоне!",
-        }
+        # Создать запись о посещении (артефакт будет выдан автоматически в сервисе)
+        try:
+            visit = service.create_geozone_visit(
+                user_id=current_user.id,
+                geozone_id=geozone_id,
+                company_id=current_user.company_id,
+            )
+            return {
+                "is_inside": True,
+                "visit_id": visit.id,
+                "message": "Вы находитесь в геозоне!",
+            }
+        except Exception as e:
+            logger.warning(f"Ошибка при создании посещения: {e}")
+            return {
+                "is_inside": True,
+                "visit_id": None,
+                "message": "Вы находитесь в геозоне, но произошла ошибка при сохранении посещения",
+            }
 
     return {"is_inside": False, "message": "Вы не находитесь в геозоне"}
 
@@ -138,13 +146,16 @@ def check_nearby_geozones(
         company_id=current_user.company_id,
     )
 
-    # Создать записи о посещениях
+    # Создать записи о посещениях (артефакты будут выданы автоматически в сервисе)
     for geozone in geozones:
-        service.create_geozone_visit(
-            user_id=current_user.id,
-            geozone_id=geozone.id,
-            company_id=current_user.company_id,
-        )
+        try:
+            service.create_geozone_visit(
+                user_id=current_user.id,
+                geozone_id=geozone.id,
+                company_id=current_user.company_id,
+            )
+        except Exception as e:
+            logger.warning(f"Ошибка при создании посещения геозоны {geozone.id}: {e}")
 
     return geozones
 
