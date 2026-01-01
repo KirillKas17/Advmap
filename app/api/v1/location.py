@@ -1,8 +1,11 @@
 """API endpoints для геолокации."""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
@@ -20,6 +23,7 @@ from app.services.geolocation import GeolocationService
 from app.services.offline_sync import OfflineSyncService
 
 router = APIRouter(prefix="/location", tags=["location"])
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/session", response_model=LocationSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -30,46 +34,82 @@ def create_location_session(
     db: Session = Depends(get_db),
 ):
     """Создать новую сессию геолокации."""
-    service = GeolocationService(db)
-    session = service.create_location_session(
-        user_id=current_user.id,
-        is_background=is_background,
-        is_offline=is_offline,
-        company_id=current_user.company_id,
-    )
-    return session
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        service = GeolocationService(db)
+        session = service.create_location_session(
+            user_id=current_user.id,
+            is_background=is_background,
+            is_offline=is_offline,
+            company_id=current_user.company_id,
+        )
+        logger.info(f"Создана сессия геолокации: {session.id} пользователем {current_user.id}")
+        return session
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"Ошибка БД при создании сессии: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ошибка при создании сессии геолокации",
+        )
 
 
 @router.post("/session/{session_id}/point", response_model=LocationPointResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("100/minute")
 def add_location_point(
+    request: Request,
     session_id: int,
     point_data: LocationPointCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Добавить точку геолокации в сессию."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     service = GeolocationService(db)
 
-    # Проверить, что сессия принадлежит пользователю
-    session = db.query(LocationSession).filter(LocationSession.id == session_id).first()
-    if not session or session.user_id != current_user.id:
+    # Проверить, что сессия принадлежит пользователю и компании
+    session = (
+        db.query(LocationSession)
+        .filter(
+            LocationSession.id == session_id,
+            LocationSession.user_id == current_user.id
+        )
+    )
+    if current_user.company_id is not None:
+        session = session.filter(LocationSession.company_id == current_user.company_id)
+    session = session.first()
+    
+    if not session:
+        logger.warning(f"Попытка добавить точку в несуществующую сессию: {session_id} пользователем {current_user.id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Сессия не найдена",
         )
 
-    location_point = service.add_location_point(
-        session_id=session_id,
-        latitude=point_data.latitude,
-        longitude=point_data.longitude,
-        accuracy_meters=point_data.accuracy_meters,
-        altitude_meters=point_data.altitude_meters,
-        speed_ms=point_data.speed_ms,
-        heading_degrees=point_data.heading_degrees,
-        timestamp=point_data.timestamp,
-        company_id=current_user.company_id,
-    )
-    return location_point
+    try:
+        location_point = service.add_location_point(
+            session_id=session_id,
+            latitude=point_data.latitude,
+            longitude=point_data.longitude,
+            accuracy_meters=point_data.accuracy_meters,
+            altitude_meters=point_data.altitude_meters,
+            speed_ms=point_data.speed_ms,
+            heading_degrees=point_data.heading_degrees,
+            timestamp=point_data.timestamp,
+            company_id=current_user.company_id,
+        )
+        return location_point
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"Ошибка БД при добавлении точки: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ошибка при добавлении точки геолокации",
+        )
 
 
 @router.post("/offline/sync", response_model=LocationSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -89,7 +129,7 @@ def sync_offline_data(
             "altitude_meters": p.altitude_meters,
             "speed_ms": p.speed_ms,
             "heading_degrees": p.heading_degrees,
-            "timestamp": p.timestamp or datetime.utcnow(),
+            "timestamp": p.timestamp or datetime.now(timezone.utc),
         }
         for p in sync_data.points
     ]
@@ -130,7 +170,7 @@ def batch_sync_offline_data(
                 "altitude_meters": p.altitude_meters,
                 "speed_ms": p.speed_ms,
                 "heading_degrees": p.heading_degrees,
-                "timestamp": p.timestamp or datetime.utcnow(),
+                "timestamp": p.timestamp or datetime.now(timezone.utc),
             }
             for p in session_data.points
         ]
@@ -155,19 +195,32 @@ def batch_sync_offline_data(
 def get_location_points(
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
-    limit: int = 1000,
+    limit: int = 100,
+    offset: int = 0,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Получить точки геолокации пользователя."""
+    """Получить точки геолокации пользователя с пагинацией."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    if limit > 1000:
+        limit = 1000
+    if limit < 1:
+        limit = 1
+    if offset < 0:
+        offset = 0
+    
     service = GeolocationService(db)
     points = service.get_user_location_points(
         user_id=current_user.id,
         start_time=start_time,
         end_time=end_time,
         limit=limit,
+        offset=offset,
         company_id=current_user.company_id,
     )
+    logger.debug(f"Получено {len(points)} точек для пользователя {current_user.id}")
     return points
 
 

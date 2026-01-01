@@ -1,7 +1,9 @@
 """API endpoints для геозон."""
+import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user
@@ -11,6 +13,7 @@ from app.schemas.geozone import GeozoneCreate, GeozoneResponse, GeozoneVisitResp
 from app.services.geozone import GeozoneService
 
 router = APIRouter(prefix="/geozone", tags=["geozone"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/", response_model=GeozoneResponse, status_code=status.HTTP_201_CREATED)
@@ -29,25 +32,45 @@ def create_geozone(
             description=geozone_data.description,
             company_id=current_user.company_id,
         )
+        logger.info(f"Создана геозона: {geozone.id} пользователем {current_user.id}")
         return geozone
     except ValueError as e:
+        logger.warning(f"Ошибка валидации при создании геозоны: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
+        )
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"Ошибка БД при создании геозоны: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ошибка при создании геозоны",
         )
 
 
 @router.get("/", response_model=List[GeozoneResponse])
 def get_geozones(
     geozone_type: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Получить все активные геозоны."""
+    """Получить все активные геозоны с пагинацией."""
+    if limit > 1000:
+        limit = 1000
+    if limit < 1:
+        limit = 1
+    if offset < 0:
+        offset = 0
+    
     service = GeozoneService(db)
     geozones = service.get_all_active_geozones(
         geozone_type=geozone_type,
         company_id=current_user.company_id,
+        limit=limit,
+        offset=offset,
     )
     return geozones
 
@@ -60,8 +83,9 @@ def get_geozone(
 ):
     """Получить геозону по ID."""
     service = GeozoneService(db)
-    geozone = service.get_geozone_by_id(geozone_id)
+    geozone = service.get_geozone_by_id(geozone_id, company_id=current_user.company_id)
     if not geozone:
+        logger.warning(f"Попытка доступа к несуществующей геозоне: {geozone_id} пользователем {current_user.id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Геозона не найдена",
@@ -129,15 +153,24 @@ def check_nearby_geozones(
 def get_my_visits(
     geozone_id: Optional[int] = None,
     limit: int = 100,
+    offset: int = 0,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Получить мои посещения геозон."""
+    """Получить мои посещения геозон с пагинацией."""
+    if limit > 1000:
+        limit = 1000
+    if limit < 1:
+        limit = 1
+    if offset < 0:
+        offset = 0
+    
     service = GeozoneService(db)
     visits = service.get_user_geozone_visits(
         user_id=current_user.id,
         geozone_id=geozone_id,
         company_id=current_user.company_id,
         limit=limit,
+        offset=offset,
     )
     return visits

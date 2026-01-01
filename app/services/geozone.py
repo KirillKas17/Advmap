@@ -1,9 +1,11 @@
 """Сервис работы с геозонами (полигонами)."""
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from geoalchemy2.shape import from_shape, to_shape
 from shapely.geometry import Point, Polygon
+from shapely.validation import make_valid
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -11,6 +13,7 @@ from app.core.config import get_settings
 from app.models.geozone import Geozone, GeozoneVisit
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class GeozoneService:
@@ -33,6 +36,10 @@ class GeozoneService:
             raise ValueError("Полигон должен содержать минимум 3 точки")
 
         polygon = Polygon(polygon_coordinates)
+        # Валидация и исправление полигона
+        if not polygon.is_valid:
+            logger.warning(f"Полигон невалиден, исправление: {name}")
+            polygon = make_valid(polygon)
 
         center = polygon.centroid
         center_lat = center.y
@@ -100,7 +107,7 @@ class GeozoneService:
     ) -> GeozoneVisit:
         """Создать запись о посещении геозоны."""
         if visit_started_at is None:
-            visit_started_at = datetime.utcnow()
+            visit_started_at = datetime.now(timezone.utc)
 
         visit = GeozoneVisit(
             user_id=user_id,
@@ -122,7 +129,7 @@ class GeozoneService:
         visit = self.db.query(GeozoneVisit).filter(GeozoneVisit.id == visit_id).first()
         if visit:
             if visit_ended_at is None:
-                visit_ended_at = datetime.utcnow()
+                visit_ended_at = datetime.now(timezone.utc)
             visit.visit_ended_at = visit_ended_at
             if visit.visit_started_at:
                 duration = (visit_ended_at - visit.visit_started_at).total_seconds()
@@ -137,8 +144,9 @@ class GeozoneService:
         geozone_id: Optional[int] = None,
         company_id: Optional[int] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> List[GeozoneVisit]:
-        """Получить посещения геозон пользователя."""
+        """Получить посещения геозон пользователя с пагинацией."""
         query = self.db.query(GeozoneVisit).filter(GeozoneVisit.user_id == user_id)
 
         if geozone_id:
@@ -147,19 +155,38 @@ class GeozoneService:
         if company_id is not None:
             query = query.filter(GeozoneVisit.company_id == company_id)
 
-        return query.order_by(GeozoneVisit.visit_started_at.desc()).limit(limit).all()
+        return query.order_by(GeozoneVisit.visit_started_at.desc()).offset(offset).limit(limit).all()
 
-    def get_geozone_by_id(self, geozone_id: int) -> Optional[Geozone]:
-        """Получить геозону по ID."""
-        return self.db.query(Geozone).filter(Geozone.id == geozone_id).first()
+    def get_geozone_by_id(
+        self, geozone_id: int, company_id: Optional[int] = None
+    ) -> Optional[Geozone]:
+        """Получить геозону по ID с проверкой company_id и soft delete."""
+        query = (
+            self.db.query(Geozone)
+            .filter(
+                Geozone.id == geozone_id,
+                Geozone.deleted_at.is_(None)
+            )
+        )
+        if company_id is not None:
+            query = query.filter(Geozone.company_id == company_id)
+        return query.first()
 
     def get_all_active_geozones(
         self,
         geozone_type: Optional[str] = None,
         company_id: Optional[int] = None,
+        limit: int = 100,
+        offset: int = 0,
     ) -> List[Geozone]:
-        """Получить все активные геозоны."""
-        query = self.db.query(Geozone).filter(Geozone.is_active.is_(True))
+        """Получить все активные геозоны с фильтрацией по soft delete и пагинацией."""
+        query = (
+            self.db.query(Geozone)
+            .filter(
+                Geozone.is_active.is_(True),
+                Geozone.deleted_at.is_(None)
+            )
+        )
 
         if geozone_type:
             query = query.filter(Geozone.geozone_type == geozone_type)
@@ -167,4 +194,4 @@ class GeozoneService:
         if company_id is not None:
             query = query.filter(Geozone.company_id == company_id)
 
-        return query.all()
+        return query.offset(offset).limit(limit).all()

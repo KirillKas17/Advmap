@@ -1,5 +1,6 @@
 """Сервис автоматического определения дома и работы."""
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from geoalchemy2.shape import from_shape
@@ -13,6 +14,7 @@ from app.models.location import LocationPoint, LocationSession
 from app.models.user_home_work import UserHomeWork
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class HomeWorkDetectionService:
@@ -88,9 +90,9 @@ class HomeWorkDetectionService:
         5. Определить работу (дневные посещения в будни, регулярность)
         """
         if start_date is None:
-            start_date = datetime.utcnow() - timedelta(days=30)
+            start_date = datetime.now(timezone.utc) - timedelta(days=30)
         if end_date is None:
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
 
         # Получить все точки геолокации
         sessions = (
@@ -192,7 +194,7 @@ class HomeWorkDetectionService:
                     existing.confidence_score = max(existing.confidence_score, confidence)
                     existing.total_visits += len(cluster)
                     existing.total_time_minutes += total_time_minutes
-                    existing.last_updated_at = datetime.utcnow()
+                    existing.last_updated_at = datetime.now(timezone.utc)
                     detected_locations.append(existing)
                 else:
                     # Создать новую
@@ -207,7 +209,7 @@ class HomeWorkDetectionService:
                         total_visits=len(cluster),
                         total_time_minutes=total_time_minutes,
                         first_detected_at=visit_times[0],
-                        last_updated_at=datetime.utcnow(),
+                        last_updated_at=datetime.now(timezone.utc),
                         company_id=company_id,
                     )
                     self.db.add(new_location)
@@ -217,6 +219,7 @@ class HomeWorkDetectionService:
         for location in detected_locations:
             self.db.refresh(location)
 
+        logger.info(f"Определено {len(detected_locations)} локаций для пользователя {user_id}")
         return detected_locations
 
     def get_user_home_work(
